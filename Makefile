@@ -8,7 +8,7 @@ venv: requirements.txt
 format: venv
 	venv/bin/isort .
 	venv/bin/black .
-	venv/bin/flake8 --exclude venv .
+	venv/bin/flake8 --exclude venv --max-line-length 120 .
 
 .PHONY: clean
 clean:

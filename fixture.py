@@ -1,47 +1,49 @@
 import argparse
 import datetime
-from dateutil import tz
 import json
 import os
-import requests
 import sys
 import time
+import urllib.request
 
 BASE_URL = "https://api.football-data.org/v4/teams"
 ONE_DAY = 24 * 60 * 60  # seconds
 DISPLAY = 5
 
+cur_dir = os.path.dirname(os.path.realpath(__file__))
+now_timestamp = time.time()
+UTC_OFFSET = datetime.datetime.fromtimestamp(
+    now_timestamp
+) - datetime.datetime.utcfromtimestamp(now_timestamp)
 
-def get_cache_fn(team_id):
-    dir_name = os.path.dirname(os.path.realpath(__file__))
-    return f"{dir_name}/cache_{team_id}.json"
+
+def get_cache_name(team_id):
+    return f"{cur_dir}/cache_{team_id}.json"
 
 
 def get_image_dir():
-    dir_name = os.path.dirname(os.path.realpath(__file__))
-    return f"{dir_name}/images"
+    return f"{cur_dir}/images"
 
 
 def get_from_cache(team_id):
-    cache_fn = get_cache_fn(team_id)
+    cache_name = get_cache_name(team_id)
     if (
-        not os.path.exists(cache_fn)
-        or (os.path.getmtime(cache_fn) + ONE_DAY) < time.time()
+        not os.path.exists(cache_name)
+        or (os.path.getmtime(cache_name) + ONE_DAY) < time.time()
     ):
         return None
-    with open(cache_fn, "r") as f:
+    with open(cache_name, "r") as f:
         return f.read()
 
 
 def get_from_live(team_id, api_key):
     url = f"{BASE_URL}/{team_id}/matches"
     headers = {"X-Auth-Token": api_key}
-    resp = requests.get(url, headers=headers)
-    if resp.status_code != 200:
-        raise RuntimeError(resp.status_codee)
-    content = resp.text
-    cache_fn = get_cache_fn(team_id)
-    with open(cache_fn, "w") as f:
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req) as f:
+        content = f.read().decode("utf-8")
+    cache_name = get_cache_name(team_id)
+    with open(cache_name, "w") as f:
         f.write(content)
     return content
 
@@ -51,15 +53,15 @@ def parse_matches(content):
 
 
 def download_icon(url):
-    file_name = os.path.join("images", os.path.basename(url))
+    image_dir = get_image_dir()
+    os.makedirs(image_dir, exist_ok=True)
+    file_name = os.path.join(image_dir, os.path.basename(url))
     if os.path.exists(file_name):
         return
-    resp = requests.get(url, stream=True)
-    if resp.status_code != 200:
-        return
-    with open(file_name, "wb") as f:
-        for chunk in resp:
-            f.write(chunk)
+    req = urllib.request.Request(url)
+    with urllib.request.urlopen(req) as url_f:
+        with open(file_name, "wb") as out_f:
+            out_f.write(url_f.read())
 
 
 def download_icons(matches):
@@ -77,10 +79,9 @@ def get_opponent_icon(match, team_id):
 
 
 def convert_date(date_str):
-    utc = tz.gettz("UTC")
-    localtz = tz.tzlocal()
-    d = datetime.datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=utc)
-    return d.astimezone(localtz).strftime("%Y-%m-%d (%A) %H:%M")
+    d = datetime.datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%SZ")
+    d += UTC_OFFSET
+    return d.strftime("%Y-%m-%d (%A) %H:%M")
 
 
 def main(team_id, api_key):
@@ -88,7 +89,7 @@ def main(team_id, api_key):
     matches = parse_matches(content)
     download_icons(matches)
     today = datetime.datetime.utcnow().date().strftime("%Y-%m-%d")
-    matches = filter(lambda m: m["utcDate"] > today, matches)
+    matches = filter(lambda m: m["utcDate"] >= today, matches)
     matches = sorted(matches, key=lambda m: m["utcDate"])
 
     image_dir = get_image_dir()
@@ -97,9 +98,7 @@ def main(team_id, api_key):
             {
                 "title": f"{m['homeTeam']['shortName']} vs {m['awayTeam']['shortName']}",
                 "subtitle": f"{m['competition']['name']} - {convert_date(m['utcDate'])}",
-                "icon": {
-                    "path": f"{image_dir}/{get_opponent_icon(m, team_id)}"
-                },
+                "icon": {"path": f"{image_dir}/{get_opponent_icon(m, team_id)}"},
             }
             for m in matches[:DISPLAY]
         ]
